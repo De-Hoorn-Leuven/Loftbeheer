@@ -2131,9 +2131,58 @@ window.saveBoeking = async function() {
                 checkInTijd:ciTijd, checkOutTijd:coTijd,
                 logeerbedden, babybedden, extraKamer, notitie};
     if (editBoekingId) {
-      const oudeTaken = Object.values(cache.taken).filter(ta=>ta.bkId===editBoekingId && ta.status==='open');
+      const oudeLoft = cache.boekingen[editBoekingId]?.loftId;
+      const loftGewijzigd = oudeLoft && oudeLoft !== loftId;
+
+      // Bevestigde taken voor deze boeking
+      const bevestigdeTaken = Object.values(cache.taken).filter(
+        ta => ta.bkId===editBoekingId && ta.bevestigd
+      );
+
+      // Bevestigde taken buiten nieuw datumvenster → eigenaar moet beslissen
+      const takenBuitenVenster = bevestigdeTaken.filter(
+        ta => ta.datum < ci || ta.datum > co
+      );
+      let verwijderBuiten = false;
+      if (takenBuitenVenster.length) {
+        const datums = takenBuitenVenster.map(ta => `${fmtDateLong(ta.datum)}`).join(', ');
+        const keuze = confirm(
+          `⚠️ ${takenBuitenVenster.length} bevestigde poetstaak(en) valt buiten het nieuwe verblijf:\n${datums}\n\nKlik OK om deze taak(en) te VERWIJDEREN.\nKlik Annuleren om ze te BEWAREN (los van de boeking).`
+        );
+        verwijderBuiten = keuze;
+        if (!keuze) {
+          // Bewaren maar ontkoppelen van boeking (bkId leegmaken)
+          // zodat ze niet mee verwijderd worden bij boeking-delete
+        }
+      }
+
+      // Open niet-bevestigde taken verwijderen
+      const teVerwijderen = Object.values(cache.taken).filter(ta =>
+        ta.bkId===editBoekingId && ta.status==='open' && !ta.bevestigd
+      );
       const batch = writeBatch(db);
-      oudeTaken.forEach(ta => batch.delete(doc(db,'taken',ta.id)));
+      teVerwijderen.forEach(ta => batch.delete(doc(db,'taken',ta.id)));
+
+      // Bevestigde taken buiten venster: verwijderen of ontkoppelen
+      if (takenBuitenVenster.length) {
+        takenBuitenVenster.forEach(ta => {
+          if (verwijderBuiten) {
+            batch.delete(doc(db,'taken',ta.id));
+          } else {
+            // Ontkoppelen van boeking maar bewaren als zelfstandige taak
+            batch.update(doc(db,'taken',ta.id), {bkId: null, gast: ta.gast + ' (losgekoppeld)'});
+          }
+        });
+      }
+
+      // Bevestigde taken: loftId updaten als loft gewijzigd
+      if (loftGewijzigd && bevestigdeTaken.length) {
+        bevestigdeTaken.forEach(ta => {
+          batch.update(doc(db,'taken',ta.id), {loftId});
+        });
+        toast(`${bevestigdeTaken.length} bevestigde taak(en) verplaatst naar loft ${loftId}`, 'ok');
+      }
+
       batch.set(doc(db,'boekingen',id), bk);
       await batch.commit();
     } else {
@@ -2338,16 +2387,26 @@ async function generateTaken(bk) {
 
   const wb = writeBatch(db);
 
-  // Eindpoets
-  const epId = uid();
-  wb.set(doc(db,'taken',epId), {
-    id:epId, type:'eindpoets', loftId:bk.loftId, bkId:bk.id,
-    gast:bk.naam, datum:ep.datum, tijdVan:ep.tijdVan, tijdTot:ep.tijdTot,
-    status:'open', klaarDoor:null, klaarOp:null
-  });
+  // Eindpoets: alleen aanmaken als er geen bevestigde eindpoets al bestaat
+  const bevestigdeEp = Object.values(cache.taken).find(
+    ta => ta.bkId===bk.id && ta.type==='eindpoets' && ta.bevestigd
+  );
+  if (!bevestigdeEp) {
+    const epId = uid();
+    wb.set(doc(db,'taken',epId), {
+      id:epId, type:'eindpoets', loftId:bk.loftId, bkId:bk.id,
+      gast:bk.naam, datum:ep.datum, tijdVan:ep.tijdVan, tijdTot:ep.tijdTot,
+      status:'open', klaarDoor:null, klaarOp:null
+    });
+  }
 
-  // Tussentijds
-  berekenTussentijds(bk.checkIn, bk.checkOut).forEach(datum => {
+  // Tussentijds: sla over als er al een bevestigde taak bestaat voor die boeking
+  const bevestigdeTuss = Object.values(cache.taken).filter(
+    ta => ta.bkId===bk.id && ta.type==='tussentijds' && ta.bevestigd
+  );
+  berekenTussentijds(bk.checkIn, bk.checkOut).forEach((datum, idx) => {
+    // Als er al een bevestigde tussentijdse taak is op deze positie, sla over
+    if (bevestigdeTuss[idx]) return;
     const tid = uid();
     wb.set(doc(db,'taken',tid), {
       id:tid, type:'tussentijds', loftId:bk.loftId, bkId:bk.id,
