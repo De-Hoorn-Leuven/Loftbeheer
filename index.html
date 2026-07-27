@@ -1863,16 +1863,16 @@ function _bkVulPoetsPlanning(bk) {
         <div class="pp-datum-wrap">
           <input type="date" class="pp-datum-input" value="${ta.datum}"
             ${isBevestigd ? 'disabled' : ''}
-            onchange="bkPoetsDatumGewijzigd('${ta.id}', this.value)">
+            id="pp-datum-${ta.id}">
         </div>
         <div style="display:flex;align-items:center;gap:3px;flex-shrink:0">
           <input type="time" value="${van}" style="background:transparent;border:none;border-bottom:1px dashed var(--bdr2);color:var(--muted);font-size:10px;padding:1px 2px;width:48px;font-family:var(--sans);"
             ${isBevestigd ? 'disabled' : ''}
-            onchange="bkPoetsTijdGewijzigd('${ta.id}','van',this.value)">
+            id="pp-van-${ta.id}">
           <span style="color:var(--muted);font-size:10px">–</span>
           <input type="time" value="${tot}" style="background:transparent;border:none;border-bottom:1px dashed var(--bdr2);color:var(--muted);font-size:10px;padding:1px 2px;width:48px;font-family:var(--sans);"
             ${isBevestigd ? 'disabled' : ''}
-            onchange="bkPoetsTijdGewijzigd('${ta.id}','tot',this.value)">
+            id="pp-tot-${ta.id}">
         </div>
         <button class="pp-bevestig-btn${isBevestigd ? ' bevestigd' : ''}"
           onclick="bkBevestigPoets('${ta.id}')"
@@ -1884,48 +1884,54 @@ function _bkVulPoetsPlanning(bk) {
   }).join('');
 }
 
-window.bkPoetsDatumGewijzigd = async function(taakId, nieuweDatum) {
-  if (!nieuweDatum) return;
-  try {
-    await updateDoc(doc(db,'taken',taakId), {datum: nieuweDatum});
-  } catch(e) { toast('Fout bij opslaan datum','err'); }
+window.bkPoetsDatumGewijzigd = function(taakId, nieuweDatum) {
+  // Alleen visuele feedback — echte save gebeurt bij bevestigen
+  // zodat alles atomisch in één write gaat
 };
 
-window.bkPoetsTijdGewijzigd = async function(taakId, vanTot, waarde) {
-  if (!waarde) return;
-  try {
-    const veld = vanTot === 'van' ? 'tijdVan' : 'tijdTot';
-    await updateDoc(doc(db,'taken',taakId), {[veld]: waarde});
-  } catch(e) { toast('Fout bij opslaan tijd','err'); }
+window.bkPoetsTijdGewijzigd = function(taakId, vanTot, waarde) {
+  // Alleen visuele feedback — echte save gebeurt bij bevestigen
 };
 
 window.bkBevestigPoets = async function(taakId) {
   const ta = cache.taken[taakId];
   if (!ta || ta.bevestigd) return;
 
-  // Lees actuele waarden uit de DOM (gebruiker kan net iets gewijzigd hebben)
+  // Lees ALTIJD direct uit de DOM — nooit uit cache
   const rij = document.getElementById('pprij-' + taakId);
-  const datumInput = rij?.querySelector('input[type=date]');
-  const vanInput   = rij?.querySelectorAll('input[type=time]')[0];
-  const totInput   = rij?.querySelectorAll('input[type=time]')[1];
+  if (!rij) { toast('Rij niet gevonden','err'); return; }
 
-  const nieuweDatum = datumInput?.value || ta.datum;
-  const nieuweVan   = vanInput?.value   || ta.tijdVan || '10:00';
-  const nieuweTot   = totInput?.value   || ta.tijdTot || '15:00';
+  const datumInput = document.getElementById('pp-datum-' + taakId);
+  const vanInput   = document.getElementById('pp-van-'   + taakId);
+  const totInput   = document.getElementById('pp-tot-'   + taakId);
 
-  if (!confirm(`Poetsmoment ${fmtDateLong(nieuweDatum)} (${nieuweVan}–${nieuweTot}) bevestigen?\nDit kan daarna niet meer worden gewijzigd.`)) return;
+  const nieuweDatum = datumInput?.value?.trim() || ta.datum;
+  const nieuweVan   = vanInput?.value?.trim()   || ta.tijdVan || '10:00';
+  const nieuweTot   = totInput?.value?.trim()   || ta.tijdTot || '15:00';
+
+  if (!nieuweDatum) { toast('Kies een datum','err'); return; }
+
+  if (!confirm(`Poetsmoment bevestigen?\n📅 ${fmtDateLong(nieuweDatum)}\n🕐 ${nieuweVan} – ${nieuweTot}\n\nNa bevestiging kan dit niet meer worden gewijzigd.`)) return;
 
   try {
-    // Sla datum, tijden én bevestiging in één write op
     await updateDoc(doc(db,'taken',taakId), {
-      datum:    nieuweDatum,
-      tijdVan:  nieuweVan,
-      tijdTot:  nieuweTot,
+      datum:     nieuweDatum,
+      tijdVan:   nieuweVan,
+      tijdTot:   nieuweTot,
       bevestigd: true
     });
     toast('Bevestigd ✓', 'ok');
-    if (editBoekingId) _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
-  } catch(e) { toast('Fout bij bevestigen','err'); }
+    await logAction(`Poetstaak bevestigd: loft ${ta.loftId} op ${nieuweDatum}`);
+    // Herlaad poets planning sectie na kleine vertraging zodat cache bijgewerkt is
+    setTimeout(() => {
+      if (editBoekingId && cache.boekingen[editBoekingId]) {
+        _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
+      }
+    }, 600);
+  } catch(e) {
+    console.error(e);
+    toast('Fout bij bevestigen','err');
+  }
 };
 
 // ── Extra poetstaak ──
