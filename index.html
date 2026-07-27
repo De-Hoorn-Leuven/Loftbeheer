@@ -1498,12 +1498,15 @@ window._openTaakDetail = function(id) {
   const ta = cache.taken[id];
   if (!ta) return;
   const isKlaar = ta.status==='klaar';
+  const typeLabel = ta.type==='tussentijds' ? '🔄 Tussentijdse poets'
+                  : ta.type==='extra'       ? '🧹 Extra poets (manueel)'
+                  :                           '🧹 Eindpoets';
   document.getElementById('mTaak-t').textContent = `Loft ${ta.loftId}`;
   document.getElementById('mTaak-body').innerHTML = `
     <div style="display:grid;gap:12px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="font-size:12px;color:var(--muted)">Type</span>
-        <span>${ta.type==='tussentijds'?'🔄 Tussentijdse poets':'🧹 Eindpoets'}</span>
+        <span>${typeLabel}</span>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="font-size:12px;color:var(--muted)">Datum</span>
@@ -1531,12 +1534,34 @@ window._openTaakDetail = function(id) {
       `:''}
     </div>
   `;
+
+  // Verwijderknop alleen voor eigenaar, niet voor bevestigde tussentijdse taken
+  const kanVerwijderen = isEigenaar() && !ta.bevestigd;
+  const verwijderKnop = kanVerwijderen
+    ? `<button class="btn btn-danger btn-sm" onclick="window._deleteTaak('${ta.id}')" style="margin-right:auto">Verwijder</button>`
+    : '';
+
   document.getElementById('mTaak-foot').innerHTML = isKlaar
-    ? `<button class="btn btn-ghost" onclick="closeModal('mTaak')">Sluiten</button>
-       <button class="btn btn-danger" onclick="window._toggleTaak('${ta.id}');closeModal('mTaak')">Zet open</button>`
-    : `<button class="btn btn-ghost" onclick="closeModal('mTaak')">Sluiten</button>
+    ? `${verwijderKnop}<button class="btn btn-ghost" onclick="closeModal('mTaak')">Sluiten</button>
+       <button class="btn btn-danger btn-sm" onclick="window._toggleTaak('${ta.id}');closeModal('mTaak')">Zet open</button>`
+    : `${verwijderKnop}<button class="btn btn-ghost" onclick="closeModal('mTaak')">Sluiten</button>
        <button class="btn btn-grn" onclick="window._toggleTaak('${ta.id}');closeModal('mTaak')">✓ Klaar</button>`;
   openModal('mTaak');
+};
+
+window._deleteTaak = async function(id) {
+  const ta = cache.taken[id];
+  if (!ta) return;
+  const typeLabel = ta.type==='tussentijds'?'tussentijdse poets':ta.type==='extra'?'extra poets':'eindpoets';
+  if (!confirm(`${typeLabel} verwijderen voor Loft ${ta.loftId} op ${fmtDateLong(ta.datum)}?`)) return;
+  try {
+    await deleteDoc(doc(db,'taken',id));
+    closeModal('mTaak');
+    toast('Taak verwijderd', 'ok');
+    await logAction(`Taak verwijderd: loft ${ta.loftId} ${ta.datum} (${ta.type})`);
+  } catch(e) {
+    toast('Fout bij verwijderen','err');
+  }
 };
 
 // ════════════════════════════════════════════════
