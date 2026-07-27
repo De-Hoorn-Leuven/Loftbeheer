@@ -654,6 +654,17 @@ input, select, textarea { font-family:var(--sans); font-size:16px; /* prevent iO
             <button class="btn btn-ghost btn-sm" onclick="openExtraPoets()" title="Extra poetstaak toevoegen">＋ Taak</button>
           </div>
         </div>
+        <div id="loft-filter-bar" style="display:none;margin-bottom:8px">
+          <select id="loft-filter" onchange="setLoftFilter(this.value)"
+            style="background:var(--sur2);border:1px solid var(--bdr);border-radius:var(--r);color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--sans);min-height:38px;width:100%">
+            <option value="">Alle loften</option>
+            <option value="9.1">Loft 9.1</option><option value="9.2">Loft 9.2</option>
+            <option value="9.3">Loft 9.3</option><option value="9.4">Loft 9.4</option>
+            <option value="9.5">Loft 9.5</option><option value="10.1">Loft 10.1</option>
+            <option value="10.2">Loft 10.2</option><option value="10.3">Loft 10.3</option>
+            <option value="10.4">Loft 10.4</option>
+          </select>
+        </div>
         <div id="takenList"></div>
       </div>
 
@@ -1231,6 +1242,8 @@ function render(page) {
     if (pb) pb.style.display = isEigenaar() ? 'flex' : 'none';
     const epb = document.getElementById('extra-poets-btn');
     if (epb) epb.style.display = isEigenaar() ? 'block' : 'none';
+    const lfb = document.getElementById('loft-filter-bar');
+    if (lfb) lfb.style.display = isEigenaar() ? 'block' : 'none';
     renderTaken();
   }
   if (page==='bezetting') renderBezetting();
@@ -1355,7 +1368,8 @@ window._cycleLoftStatus = async function(loftId) {
 // ════════════════════════════════════════════════
 // TAKEN PAGE
 // ════════════════════════════════════════════════
-let periodeFilter = 'week'; // dag | week | maand | alle
+let periodeFilter = 'week';
+let loftFilter    = '';
 
 function weekNav(dir) {
   if (dir===0) weekOffset=0; else weekOffset+=dir;
@@ -1378,6 +1392,11 @@ function setPeriode(el, p) {
   renderTaken();
 }
 window.setPeriode = setPeriode;
+
+window.setLoftFilter = function(val) {
+  loftFilter = val;
+  renderTaken();
+};
 
 function _getPeriodeBounds() {
   const t = today();
@@ -1419,6 +1438,7 @@ function renderTaken() {
   }
   if (taakFilter==='open')  taken = taken.filter(ta=>ta.status==='open');
   if (taakFilter==='klaar') taken = taken.filter(ta=>ta.status==='klaar');
+  if (loftFilter)           taken = taken.filter(ta=>ta.loftId===loftFilter);
   taken.sort((a,b)=>a.datum.localeCompare(b.datum)||a.loftId.localeCompare(b.loftId));
 
   const list = document.getElementById('takenList');
@@ -1863,16 +1883,19 @@ function _bkVulPoetsPlanning(bk) {
         <div class="pp-datum-wrap">
           <input type="date" class="pp-datum-input" value="${ta.datum}"
             ${isBevestigd ? 'disabled' : ''}
-            id="pp-datum-${ta.id}">
+            id="pp-datum-${ta.id}"
+            onchange="bkPoetsDatumGewijzigd('${ta.id}', this.value)">
         </div>
         <div style="display:flex;align-items:center;gap:3px;flex-shrink:0">
           <input type="time" value="${van}" style="background:transparent;border:none;border-bottom:1px dashed var(--bdr2);color:var(--muted);font-size:10px;padding:1px 2px;width:48px;font-family:var(--sans);"
             ${isBevestigd ? 'disabled' : ''}
-            id="pp-van-${ta.id}">
+            id="pp-van-${ta.id}"
+            onchange="bkPoetsTijdGewijzigd('${ta.id}','van',this.value)">
           <span style="color:var(--muted);font-size:10px">–</span>
           <input type="time" value="${tot}" style="background:transparent;border:none;border-bottom:1px dashed var(--bdr2);color:var(--muted);font-size:10px;padding:1px 2px;width:48px;font-family:var(--sans);"
             ${isBevestigd ? 'disabled' : ''}
-            id="pp-tot-${ta.id}">
+            id="pp-tot-${ta.id}"
+            onchange="bkPoetsTijdGewijzigd('${ta.id}','tot',this.value)">
         </div>
         <button class="pp-bevestig-btn${isBevestigd ? ' bevestigd' : ''}"
           onclick="bkBevestigPoets('${ta.id}')"
@@ -1884,13 +1907,18 @@ function _bkVulPoetsPlanning(bk) {
   }).join('');
 }
 
-window.bkPoetsDatumGewijzigd = function(taakId, nieuweDatum) {
-  // Alleen visuele feedback — echte save gebeurt bij bevestigen
-  // zodat alles atomisch in één write gaat
+window.bkPoetsDatumGewijzigd = async function(taakId, nieuweDatum) {
+  if (!nieuweDatum) return;
+  try {
+    await updateDoc(doc(db,'taken',taakId), {datum: nieuweDatum});
+  } catch(e) { console.error('datum save:', e); toast('Fout bij opslaan','err'); }
 };
 
-window.bkPoetsTijdGewijzigd = function(taakId, vanTot, waarde) {
-  // Alleen visuele feedback — echte save gebeurt bij bevestigen
+window.bkPoetsTijdGewijzigd = async function(taakId, vanTot, waarde) {
+  if (!waarde) return;
+  try {
+    await updateDoc(doc(db,'taken',taakId), {[vanTot==='van'?'tijdVan':'tijdTot']: waarde});
+  } catch(e) { console.error('tijd save:', e); }
 };
 
 window.bkBevestigPoets = async function(taakId) {
@@ -1914,6 +1942,7 @@ window.bkBevestigPoets = async function(taakId) {
   if (!confirm(`Poetsmoment bevestigen?\n📅 ${fmtDateLong(nieuweDatum)}\n🕐 ${nieuweVan} – ${nieuweTot}\n\nNa bevestiging kan dit niet meer worden gewijzigd.`)) return;
 
   try {
+    console.log('bevestig:', taakId, nieuweDatum, nieuweVan, nieuweTot);
     await updateDoc(doc(db,'taken',taakId), {
       datum:     nieuweDatum,
       tijdVan:   nieuweVan,
@@ -1922,15 +1951,14 @@ window.bkBevestigPoets = async function(taakId) {
     });
     toast('Bevestigd ✓', 'ok');
     await logAction(`Poetstaak bevestigd: loft ${ta.loftId} op ${nieuweDatum}`);
-    // Herlaad poets planning sectie na kleine vertraging zodat cache bijgewerkt is
     setTimeout(() => {
       if (editBoekingId && cache.boekingen[editBoekingId]) {
         _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
       }
-    }, 600);
+    }, 800);
   } catch(e) {
-    console.error(e);
-    toast('Fout bij bevestigen','err');
+    console.error('bevestig fout:', e);
+    toast('Fout: ' + (e.message||e), 'err');
   }
 };
 
