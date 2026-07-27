@@ -1888,8 +1888,7 @@ window.bkPoetsDatumGewijzigd = async function(taakId, nieuweDatum) {
   if (!nieuweDatum) return;
   try {
     await updateDoc(doc(db,'taken',taakId), {datum: nieuweDatum});
-    toast('Datum aangepast ✓', 'ok');
-  } catch(e) { toast('Fout bij opslaan','err'); }
+  } catch(e) { toast('Fout bij opslaan datum','err'); }
 };
 
 window.bkPoetsTijdGewijzigd = async function(taakId, vanTot, waarde) {
@@ -1897,17 +1896,34 @@ window.bkPoetsTijdGewijzigd = async function(taakId, vanTot, waarde) {
   try {
     const veld = vanTot === 'van' ? 'tijdVan' : 'tijdTot';
     await updateDoc(doc(db,'taken',taakId), {[veld]: waarde});
-  } catch(e) { toast('Fout bij opslaan','err'); }
+  } catch(e) { toast('Fout bij opslaan tijd','err'); }
 };
 
 window.bkBevestigPoets = async function(taakId) {
   const ta = cache.taken[taakId];
   if (!ta || ta.bevestigd) return;
-  if (!confirm(`Poetsmoment ${fmtDateLong(ta.datum)} bevestigen? Dit kan daarna niet meer worden gewijzigd.`)) return;
+
+  // Lees actuele waarden uit de DOM (gebruiker kan net iets gewijzigd hebben)
+  const rij = document.getElementById('pprij-' + taakId);
+  const datumInput = rij?.querySelector('input[type=date]');
+  const vanInput   = rij?.querySelectorAll('input[type=time]')[0];
+  const totInput   = rij?.querySelectorAll('input[type=time]')[1];
+
+  const nieuweDatum = datumInput?.value || ta.datum;
+  const nieuweVan   = vanInput?.value   || ta.tijdVan || '10:00';
+  const nieuweTot   = totInput?.value   || ta.tijdTot || '15:00';
+
+  if (!confirm(`Poetsmoment ${fmtDateLong(nieuweDatum)} (${nieuweVan}–${nieuweTot}) bevestigen?\nDit kan daarna niet meer worden gewijzigd.`)) return;
+
   try {
-    await updateDoc(doc(db,'taken',taakId), {bevestigd: true});
+    // Sla datum, tijden én bevestiging in één write op
+    await updateDoc(doc(db,'taken',taakId), {
+      datum:    nieuweDatum,
+      tijdVan:  nieuweVan,
+      tijdTot:  nieuweTot,
+      bevestigd: true
+    });
     toast('Bevestigd ✓', 'ok');
-    // Refresh poets planning in modal
     if (editBoekingId) _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
   } catch(e) { toast('Fout bij bevestigen','err'); }
 };
