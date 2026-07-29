@@ -2400,13 +2400,22 @@ async function generateTaken(bk) {
     });
   }
 
-  // Tussentijds: sla over als er al een bevestigde taak bestaat voor die boeking
-  const bevestigdeTuss = Object.values(cache.taken).filter(
-    ta => ta.bkId===bk.id && ta.type==='tussentijds' && ta.bevestigd
-  );
+  // Tussentijds: beschermde taken (bevestigd of klaar) per positie bijhouden
+  const t = today();
+  const beschermdeTuss = Object.values(cache.taken)
+    .filter(ta => ta.bkId===bk.id && ta.type==='tussentijds' && (ta.bevestigd || ta.status==='klaar'))
+    .sort((a,b) => a.datum.localeCompare(b.datum));
+
   berekenTussentijds(bk.checkIn, bk.checkOut).forEach((datum, idx) => {
-    // Als er al een bevestigde tussentijdse taak is op deze positie, sla over
-    if (bevestigdeTuss[idx]) return;
+    // Nooit een poetstaak in het verleden aanmaken
+    if (datum < t) return;
+    // Als er op deze positie al een beschermde taak bestaat, sla over
+    if (beschermdeTuss[idx]) return;
+    // Als er al een open taak bestaat op exact deze datum voor deze boeking, sla over
+    const bestaat = Object.values(cache.taken).find(
+      ta => ta.bkId===bk.id && ta.type==='tussentijds' && ta.datum===datum && ta.status==='open'
+    );
+    if (bestaat) return;
     const tid = uid();
     wb.set(doc(db,'taken',tid), {
       id:tid, type:'tussentijds', loftId:bk.loftId, bkId:bk.id,
