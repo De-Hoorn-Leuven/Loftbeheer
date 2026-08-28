@@ -2113,6 +2113,17 @@ window.saveBoeking = async function() {
   if (co<=ci)     { bkError('Check-out moet na check-in liggen.'); return; }
   if (!loftId)    { bkError('Kies een loft.'); return; }
   if (!naam)      { bkError('Voer de naam van de gast in.'); return; }
+  // Extra check: late CO (≥ 12:00) terwijl volgende CI op zelfde dag → onmogelijk
+  if (tijdNaarMinuten(coTijd) > 12*60) {
+    const volgendeSameDag = Object.values(cache.boekingen).find(b =>
+      b.loftId===loftId && b.id!==editBoekingId && b.checkIn===co
+    );
+    if (volgendeSameDag) {
+      bkError(`Late check-out (${coTijd}) is niet mogelijk: volgende gast (${volgendeSameDag.naam}) checkt in op ${fmtDate(co)}. Er is geen tijd voor de eindpoets.`);
+      return;
+    }
+  }
+
   const tijdFout = valideerTijden(loftId, ci, co, ciTijd, coTijd, editBoekingId);
   if (tijdFout)   { bkError(tijdFout); return; }
   const beschikbaar = beschikbareLoften(ci, co, editBoekingId);
@@ -2275,14 +2286,20 @@ function _isWerkdag(datum) {
  * Prioriteit: werkdag > zaterdag > zondag/feestdag
  * Houdt rekening met volgende check-in als deadline.
  */
-function berekenEindpoetsDatum(coStr, nextCiStr) {
+function berekenEindpoetsDatum(coStr, nextCiStr, coTijd) {
   const co = new Date(coStr+'T12:00:00'); co.setHours(0,0,0,0);
   const nextCi = nextCiStr ? (() => { const d=new Date(nextCiStr+'T12:00:00'); d.setHours(0,0,0,0); return d; })() : null;
+  const coMin = tijdNaarMinuten(coTijd || '11:00');
+  // Poets op CO-dag zelf enkel mogelijk als CO vóór 12:00 (4u buffer naar 16:00 minimum)
+  const poetsMogelijkOpCOdag = coMin <= 12*60;
 
   function tijden(d) {
-    const isCodag   = d.toDateString() === co.toDateString();
+    const isCodag    = d.toDateString() === co.toDateString();
     const isNxtCiDag = nextCi && d.toDateString() === nextCi.toDateString();
-    const tijdVan = isCodag ? '11:00' : '09:00';
+    // tijdVan: CO-tijd op CO-dag (of 09:00 op andere dag), maar minimum coTijd + 30min
+    const tijdVan = isCodag
+      ? String(Math.floor(coMin/60)).padStart(2,'0') + ':' + String(coMin%60).padStart(2,'0')
+      : '09:00';
     const tijdTot = isNxtCiDag ? '15:00' : '';
     return {tijdVan, tijdTot};
   }
@@ -2295,6 +2312,9 @@ function berekenEindpoetsDatum(coStr, nextCiStr) {
     const feest   = _isBeFeestdag(d);
     const werkdag = dag!==0 && dag!==6 && !feest;
     const za      = dag===6 && !feest;
+    const isCodag = d.toDateString() === co.toDateString();
+    // CO-dag enkel als kandidaat als poets er mogelijk is
+    if (isCodag && !poetsMogelijkOpCOdag) continue;
     kandidaten.push({d, werkdag, za});
   }
 
@@ -2383,7 +2403,7 @@ async function generateTaken(bk) {
     .sort((a,b) => a.checkIn.localeCompare(b.checkIn))[0] || null;
 
   // Eindpoets voor DEZE boeking (deadline = start volgende boeking)
-  const ep = berekenEindpoetsDatum(bk.checkOut, volgendeBk?.checkIn || null);
+  const ep = berekenEindpoetsDatum(bk.checkOut, volgendeBk?.checkIn || null, bk.checkOutTijd);
 
   const wb = writeBatch(db);
 
