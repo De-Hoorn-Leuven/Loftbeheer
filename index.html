@@ -526,6 +526,45 @@ input, select, textarea { font-family:var(--sans); font-size:16px; /* prevent iO
 .pp-bevestig-btn:hover { background:var(--grn-l);color:var(--grn);border-color:rgba(58,122,80,.4); }
 .pp-bevestig-btn.bevestigd { background:var(--grn-l);color:var(--grn);border-color:rgba(58,122,80,.4);cursor:default; }
 
+/* Onderhoud taken */
+.ot-card {
+  background:var(--sur);border:1px solid var(--bdr);border-radius:var(--r2);
+  margin-bottom:10px;overflow:hidden;
+}
+.ot-header {
+  display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;
+  transition:background .14s;user-select:none;
+}
+.ot-header:hover { background:var(--sur2); }
+.ot-header:active { background:var(--sur3); }
+.ot-titel { font-family:var(--disp);font-size:15px;font-weight:700;color:var(--cream);flex:1; }
+.ot-meta  { font-size:11px;color:var(--muted); }
+.ot-progress { font-size:12px;font-weight:600;margin-left:auto;flex-shrink:0; }
+.ot-loft-grid {
+  display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
+  padding:12px 16px 16px;border-top:1px solid var(--bdr);
+}
+.ot-loft {
+  border-radius:var(--r2);padding:12px 10px;text-align:center;cursor:pointer;
+  transition:all .14s;border:2px solid transparent;user-select:none;
+}
+.ot-loft:active { transform:scale(.96); }
+.ot-loft-nr   { font-family:var(--disp);font-size:20px;font-weight:800;margin-bottom:4px; }
+.ot-loft-info { font-size:10px;margin-top:2px; }
+/* Groen = klaar */
+.ot-klaar  { background:rgba(58,122,80,.15);border-color:rgba(58,122,80,.5); }
+.ot-klaar  .ot-loft-nr   { color:var(--grn); }
+.ot-klaar  .ot-loft-info { color:var(--grn);opacity:.8; }
+/* Geel = te doen, vrij */
+.ot-todo   { background:rgba(200,146,42,.12);border-color:rgba(200,146,42,.4); }
+.ot-todo   .ot-loft-nr   { color:var(--gold); }
+.ot-todo   .ot-loft-info { color:var(--gold);opacity:.7; }
+/* Rood = te doen, bezet */
+.ot-bezet  { background:rgba(192,64,48,.15);border-color:rgba(192,64,48,.5); }
+.ot-bezet  .ot-loft-nr   { color:var(--red); }
+.ot-bezet  .ot-loft-info { color:var(--red);opacity:.8; }
+.ot-add-btn { width:100%;margin-top:4px; }
+
 /* Responsive knoplabels bezetting nav */
 .btn-lbl-short { display:none; }
 .btn-lbl-long  { display:inline; }
@@ -685,6 +724,11 @@ input, select, textarea { font-family:var(--sans); font-size:16px; /* prevent iO
         </div>
       </div>
 
+      <!-- ── ONDERHOUD PAGE ── -->
+      <div class="page" id="p-onderhoud">
+        <div id="onderhoud-lijst"></div>
+      </div>
+
       <!-- ── TEAM PAGE ── -->
       <div class="page" id="p-team">
         <div class="card">
@@ -816,6 +860,45 @@ input, select, textarea { font-family:var(--sans); font-size:16px; /* prevent iO
       <button class="btn btn-ghost" onclick="closeModal('mBoeking')">Annuleren</button>
       <button class="btn btn-gold" id="bkSaveBtn" onclick="saveBoeking()">Opslaan</button>
     </div>
+  </div>
+</div>
+
+<!-- ONDERHOUD TAAK AANMAKEN -->
+<div class="ovl" id="mOnderhoud">
+  <div class="mc" style="max-width:420px">
+    <div class="mc-drag"></div>
+    <div class="mh">
+      <div class="mh-t" id="mOnderhoud-t">Onderhoudstaak</div>
+      <button class="mc-x" onclick="closeModal('mOnderhoud')">✕</button>
+    </div>
+    <div class="mb">
+      <div class="fld">
+        <label>Naam taak</label>
+        <input type="text" id="ot-naam" placeholder="bv. Filters airco reinigen">
+      </div>
+      <div class="fld">
+        <label>Omschrijving (optioneel)</label>
+        <textarea id="ot-omschrijving" placeholder="Instructies voor de uitvoerder..." style="min-height:70px"></textarea>
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn btn-danger btn-sm" id="otDelBtn" onclick="deleteOnderhoudTaak()" style="display:none">Verwijder</button>
+      <button class="btn btn-ghost" onclick="closeModal('mOnderhoud')">Annuleren</button>
+      <button class="btn btn-gold" onclick="saveOnderhoudTaak()">Opslaan</button>
+    </div>
+  </div>
+</div>
+
+<!-- ONDERHOUD LOFT BEVESTIGEN -->
+<div class="ovl" id="mOnderhoudLoft">
+  <div class="mc" style="max-width:380px">
+    <div class="mc-drag"></div>
+    <div class="mh">
+      <div class="mh-t" id="mOnderhoudLoft-t">Loft afvinken</div>
+      <button class="mc-x" onclick="closeModal('mOnderhoudLoft')">✕</button>
+    </div>
+    <div class="mb" id="mOnderhoudLoft-body"></div>
+    <div class="mf" id="mOnderhoudLoft-foot"></div>
   </div>
 </div>
 
@@ -1040,7 +1123,7 @@ function startListeners() {
   unsubscribers.forEach(u => u());
   unsubscribers = [];
 
-  const cols = ['team','boekingen','taken','loftStatus'];
+  const cols = ['team','boekingen','taken','loftStatus','onderhoud'];
   cols.forEach(col => {
     const u = onSnapshot(collection(db, col),
       snap => {
@@ -1206,7 +1289,8 @@ function startApp() {
 function buildSidebar() {
   const items = [
     {page:'status',   ico:'🏠', lbl:'Loft Status'},
-    {page:'taken',    ico:'🧹', lbl:'Poetstaken', bdg:true},
+    {page:'taken',      ico:'🧹', lbl:'Poetstaken',  bdg:true},
+    {page:'onderhoud',  ico:'🔧', lbl:'Onderhoud'},
     ...(isEigenaar() ? [
       {page:'bezetting', ico:'📅', lbl:'Bezetting'},
       {page:'team',      ico:'👥', lbl:'Team'},
@@ -1229,7 +1313,7 @@ function nav(page) {
   document.getElementById('p-'+page).classList.add('active');
   curPage = page;
   closeSidebar();
-  const titles = {status:'Loft Status', taken:'Poetstaken', bezetting:'Bezetting', team:'Team'};
+  const titles = {status:'Loft Status', taken:'Poetstaken', onderhoud:'Onderhoud', bezetting:'Bezetting', team:'Team'};
   document.getElementById('topTitle').textContent = titles[page]||page;
   document.querySelectorAll('.sb-item').forEach(el=>el.classList.toggle('active', el.dataset.page===page));
   render(page);
@@ -1246,6 +1330,7 @@ function render(page) {
     if (lfb) lfb.style.display = isEigenaar() ? 'block' : 'none';
     renderTaken();
   }
+  if (page==='onderhoud') renderOnderhoud();
   if (page==='bezetting') renderBezetting();
   if (page==='team')      renderTeam();
 }
@@ -2635,6 +2720,160 @@ document.addEventListener('keydown', e => {
   if (e.key>='0'&&e.key<='9') window._pinKey(e.key);
   if (e.key==='Backspace') window._pinKey('⌫');
 });
+
+// ════════════════════════════════════════════════
+// ONDERHOUD TAKEN
+// ════════════════════════════════════════════════
+let editOnderhoudId = null;
+
+function renderOnderhoud() {
+  const taken = Object.values(cache.onderhoud || {})
+    .sort((a,b) => a.naam.localeCompare(b.naam));
+  const lijst = document.getElementById('onderhoud-lijst');
+  if (!lijst) return;
+
+  let html = '';
+  if (isEigenaar()) {
+    html += `<button class="btn btn-gold btn-sm" style="margin-bottom:14px" onclick="openOnderhoudModal()">＋ Onderhoudstaak toevoegen</button>`;
+  }
+  if (!taken.length) {
+    html += `<div class="empty"><div class="empty-ico">🔧</div><div class="empty-t">Geen onderhoudstaken</div><div class="empty-s">Eigenaar kan taken toevoegen via de knop hierboven.</div></div>`;
+    lijst.innerHTML = html; return;
+  }
+
+  taken.forEach(taak => {
+    const loftStatus = taak.loften || {};
+    const klaar = LOFTS.filter(l => loftStatus[l.id]?.klaar).length;
+    const totaal = LOFTS.length;
+    const pct = Math.round(klaar/totaal*100);
+    const kleurPct = pct===100 ? 'var(--grn)' : pct>0 ? 'var(--gold)' : 'var(--muted)';
+
+    html += `<div class="ot-card">
+      <div class="ot-header" onclick="toggleOnderhoudDetail('${taak.id}')">
+        <span style="font-size:20px">🔧</span>
+        <div>
+          <div class="ot-titel">${taak.naam}</div>
+          ${taak.omschrijving ? `<div class="ot-meta">${taak.omschrijving}</div>` : ''}
+        </div>
+        <div class="ot-progress" style="color:${kleurPct}">${klaar}/${totaal}</div>
+        ${isEigenaar() ? `<button class="btn btn-ghost btn-xs" onclick="event.stopPropagation();openOnderhoudModal('${taak.id}')" style="margin-left:4px">✏️</button>` : ''}
+      </div>
+      <div class="ot-loft-grid" id="otg-${taak.id}" style="display:none">
+        ${LOFTS.map(l => {
+          const ls = loftStatus[l.id];
+          const isKlaar = ls?.klaar === true;
+          const loftBezet = getLoftStatus(l.id).status === 'bezet';
+          let cls = isKlaar ? 'ot-klaar' : loftBezet ? 'ot-bezet' : 'ot-todo';
+          const datumLbl = isKlaar && ls.datum ? fmtDate(ls.datum) : '';
+          const statusLbl = isKlaar ? `✓ ${datumLbl}` : loftBezet ? '🔴 Bezet' : '○ Te doen';
+          return `<div class="ot-loft ${cls}" onclick="onderhoudLoftKlik('${taak.id}','${l.id}')">
+            <div class="ot-loft-nr">${l.id}</div>
+            <div class="ot-loft-info">${statusLbl}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  });
+
+  lijst.innerHTML = html;
+}
+
+window.toggleOnderhoudDetail = function(id) {
+  const grid = document.getElementById('otg-' + id);
+  if (!grid) return;
+  grid.style.display = grid.style.display === 'none' ? 'grid' : 'none';
+};
+
+window.onderhoudLoftKlik = function(taakId, loftId) {
+  const taak = (cache.onderhoud||{})[taakId];
+  if (!taak) return;
+  const ls = taak.loften?.[loftId];
+  const isKlaar = ls?.klaar === true;
+  const loftBezet = getLoftStatus(loftId).status === 'bezet';
+
+  document.getElementById('mOnderhoudLoft-t').textContent = `Loft ${loftId} — ${taak.naam}`;
+  document.getElementById('mOnderhoudLoft-body').innerHTML = `
+    <div style="display:grid;gap:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--muted)">Status loft</span>
+        <span class="badge ${loftBezet?'badge-red':'badge-grn'}">${loftBezet?'🔴 Bezet':'🟢 Vrij'}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--muted)">Taak status</span>
+        <span class="badge ${isKlaar?'badge-grn':'badge-ora'}">${isKlaar?'✓ Klaar':'○ Te doen'}</span>
+      </div>
+      ${isKlaar && ls.datum ? `<div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--muted)">Uitgevoerd</span>
+        <span>${fmtDateLong(ls.datum)}${ls.door?' door '+ls.door:''}</span>
+      </div>` : ''}
+      ${loftBezet && !isKlaar ? `<div style="background:var(--red-l);border:1px solid rgba(192,64,48,.3);border-radius:var(--r);padding:10px 14px;font-size:12px;color:var(--red)">Deze loft is bezet. Taak uitvoeren na checkout of in overleg met gast.</div>` : ''}
+    </div>
+  `;
+  document.getElementById('mOnderhoudLoft-foot').innerHTML = isKlaar
+    ? `<button class="btn btn-ghost" onclick="closeModal('mOnderhoudLoft')">Sluiten</button>
+       <button class="btn btn-danger btn-sm" onclick="onderhoudLoftReset('${taakId}','${loftId}')">Zet terug open</button>`
+    : `<button class="btn btn-ghost" onclick="closeModal('mOnderhoudLoft')">Sluiten</button>
+       <button class="btn btn-grn" onclick="onderhoudLoftAfvinken('${taakId}','${loftId}')">✓ Markeer klaar</button>`;
+  openModal('mOnderhoudLoft');
+};
+
+window.onderhoudLoftAfvinken = async function(taakId, loftId) {
+  try {
+    await updateDoc(doc(db,'onderhoud',taakId), {
+      [`loften.${loftId}`]: {klaar:true, datum:today(), door:curUser?.naam||''}
+    });
+    closeModal('mOnderhoudLoft');
+    toast(`Loft ${loftId} afgevinkt ✓`, 'ok');
+    await logAction(`Onderhoud "${(cache.onderhoud||{})[taakId]?.naam}" loft ${loftId} klaar`);
+  } catch(e) { toast('Fout bij opslaan','err'); }
+};
+
+window.onderhoudLoftReset = async function(taakId, loftId) {
+  if (!confirm(`Loft ${loftId} terug open zetten?`)) return;
+  try {
+    await updateDoc(doc(db,'onderhoud',taakId), {
+      [`loften.${loftId}`]: {klaar:false, datum:null, door:null}
+    });
+    closeModal('mOnderhoudLoft');
+    toast(`Loft ${loftId} terug open`, 'ok');
+  } catch(e) { toast('Fout bij opslaan','err'); }
+};
+
+window.openOnderhoudModal = function(id) {
+  editOnderhoudId = id || null;
+  const taak = id ? (cache.onderhoud||{})[id] : null;
+  document.getElementById('mOnderhoud-t').textContent = taak ? 'Bewerken' : 'Nieuwe onderhoudstaak';
+  document.getElementById('ot-naam').value = taak?.naam || '';
+  document.getElementById('ot-omschrijving').value = taak?.omschrijving || '';
+  document.getElementById('otDelBtn').style.display = taak ? 'inline-flex' : 'none';
+  openModal('mOnderhoud');
+};
+
+window.saveOnderhoudTaak = async function() {
+  const naam = document.getElementById('ot-naam').value.trim();
+  if (!naam) { toast('Geef een naam in','err'); return; }
+  const omschrijving = document.getElementById('ot-omschrijving').value.trim();
+  try {
+    const id = editOnderhoudId || uid();
+    if (editOnderhoudId) {
+      await updateDoc(doc(db,'onderhoud',id), {naam, omschrijving});
+    } else {
+      await setDoc(doc(db,'onderhoud',id), {id, naam, omschrijving, loften:{}, aangemaaktOp:today()});
+    }
+    closeModal('mOnderhoud');
+    toast('Opgeslagen ✓','ok');
+  } catch(e) { toast('Fout bij opslaan','err'); }
+};
+
+window.deleteOnderhoudTaak = async function() {
+  if (!editOnderhoudId) return;
+  if (!confirm('Onderhoudstaak verwijderen? Alle loft-afvinkingen gaan verloren.')) return;
+  try {
+    await deleteDoc(doc(db,'onderhoud',editOnderhoudId));
+    closeModal('mOnderhoud');
+    toast('Verwijderd','ok');
+  } catch(e) { toast('Fout bij verwijderen','err'); }
+};
 
 // ════════════════════════════════════════════════
 // INIT
