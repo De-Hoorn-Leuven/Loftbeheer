@@ -2196,6 +2196,24 @@ window.saveBoeking = async function() {
 
       batch.set(doc(db,'boekingen',id), bk);
       await batch.commit();
+
+      // Bij loftwissel: herbereken ook eindpoets van vorige boeking op OUDE loft
+      // want die had mogelijk de CI van deze boeking als deadline
+      if (loftGewijzigd) {
+        const alleBk = Object.values(cache.boekingen);
+        const vorigeOpOudeLoft = alleBk
+          .filter(b => b.loftId===oudeLoft && b.checkOut<=ci && b.id!==editBoekingId)
+          .sort((a,b) => b.checkOut.localeCompare(a.checkOut))[0] || null;
+        if (vorigeOpOudeLoft) {
+          // Zoek volgende boeking op oude loft NA de verplaatste boeking
+          const volgendeOpOudeLoft = alleBk
+            .filter(b => b.loftId===oudeLoft && b.checkIn>=co && b.id!==editBoekingId)
+            .sort((a,b) => a.checkIn.localeCompare(b.checkIn))[0] || null;
+          const wb2 = writeBatch(db);
+          _herberekendAangrenzende(wb2, vorigeOpOudeLoft, volgendeOpOudeLoft?.checkIn || null);
+          await wb2.commit();
+        }
+      }
     } else {
       await setDoc(doc(db,'boekingen',id), bk);
     }
