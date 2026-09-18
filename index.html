@@ -2743,7 +2743,7 @@ function renderOnderhoud() {
 
   taken.forEach(taak => {
     const loftStatus = taak.loften || {};
-    const klaar = LOFTS.filter(l => loftStatus[l.id]?.klaar).length;
+    const klaar = LOFTS.filter(l => loftStatus[l.id.replace('.','_')]?.klaar).length;
     const totaal = LOFTS.length;
     const pct = Math.round(klaar/totaal*100);
     const kleurPct = pct===100 ? 'var(--grn)' : pct>0 ? 'var(--gold)' : 'var(--muted)';
@@ -2760,7 +2760,8 @@ function renderOnderhoud() {
       </div>
       <div class="ot-loft-grid" id="otg-${taak.id}" style="display:none">
         ${LOFTS.map(l => {
-          const ls = loftStatus[l.id];
+          const lsKey = l.id.replace('.', '_');
+          const ls = loftStatus[lsKey];
           const isKlaar = ls?.klaar === true;
           const loftBezet = getLoftStatus(l.id).status === 'bezet';
           let cls = isKlaar ? 'ot-klaar' : loftBezet ? 'ot-bezet' : 'ot-todo';
@@ -2787,7 +2788,8 @@ window.toggleOnderhoudDetail = function(id) {
 window.onderhoudLoftKlik = function(taakId, loftId) {
   const taak = (cache.onderhoud||{})[taakId];
   if (!taak) return;
-  const ls = taak.loften?.[loftId];
+  const lsKey = loftId.replace('.', '_');
+  const ls = taak.loften?.[lsKey];
   const isKlaar = ls?.klaar === true;
   const loftBezet = getLoftStatus(loftId).status === 'bezet';
 
@@ -2819,24 +2821,26 @@ window.onderhoudLoftKlik = function(taakId, loftId) {
 
 window.onderhoudLoftAfvinken = async function(taakId, loftId) {
   try {
+    const key = 'loften.' + loftId.replace('.', '_');
     await updateDoc(doc(db,'onderhoud',taakId), {
-      [`loften.${loftId}`]: {klaar:true, datum:today(), door:curUser?.naam||''}
+      [key]: {klaar:true, datum:today(), door:curUser?.naam||''}
     });
     closeModal('mOnderhoudLoft');
     toast(`Loft ${loftId} afgevinkt ✓`, 'ok');
     await logAction(`Onderhoud "${(cache.onderhoud||{})[taakId]?.naam}" loft ${loftId} klaar`);
-  } catch(e) { toast('Fout bij opslaan','err'); }
+  } catch(e) { console.error(e); toast('Fout bij opslaan: ' + e.message,'err'); }
 };
 
 window.onderhoudLoftReset = async function(taakId, loftId) {
   if (!confirm(`Loft ${loftId} terug open zetten?`)) return;
   try {
+    const key = 'loften.' + loftId.replace('.', '_');
     await updateDoc(doc(db,'onderhoud',taakId), {
-      [`loften.${loftId}`]: {klaar:false, datum:null, door:null}
+      [key]: {klaar:false, datum:null, door:null}
     });
     closeModal('mOnderhoudLoft');
     toast(`Loft ${loftId} terug open`, 'ok');
-  } catch(e) { toast('Fout bij opslaan','err'); }
+  } catch(e) { console.error(e); toast('Fout bij opslaan: ' + e.message,'err'); }
 };
 
 window.openOnderhoudModal = function(id) {
