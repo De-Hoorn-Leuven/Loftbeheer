@@ -2828,6 +2828,11 @@ window.onderhoudLoftAfvinken = async function(taakId, loftId) {
     closeModal('mOnderhoudLoft');
     toast(`Loft ${loftId} afgevinkt ✓`, 'ok');
     await logAction(`Onderhoud "${(cache.onderhoud||{})[taakId]?.naam}" loft ${loftId} klaar`);
+    // Taak open houden na update
+    setTimeout(() => {
+      const grid = document.getElementById('otg-' + taakId);
+      if (grid) grid.style.display = 'grid';
+    }, 400);
   } catch(e) { console.error(e); toast('Fout bij opslaan: ' + e.message,'err'); }
 };
 
@@ -2840,6 +2845,10 @@ window.onderhoudLoftReset = async function(taakId, loftId) {
     });
     closeModal('mOnderhoudLoft');
     toast(`Loft ${loftId} terug open`, 'ok');
+    setTimeout(() => {
+      const grid = document.getElementById('otg-' + taakId);
+      if (grid) grid.style.display = 'grid';
+    }, 400);
   } catch(e) { console.error(e); toast('Fout bij opslaan: ' + e.message,'err'); }
 };
 
@@ -2857,15 +2866,29 @@ window.saveOnderhoudTaak = async function() {
   const naam = document.getElementById('ot-naam').value.trim();
   if (!naam) { toast('Geef een naam in','err'); return; }
   const omschrijving = document.getElementById('ot-omschrijving').value.trim();
+  // Onthoud welke taken open staan voor het opslaan
+  const openVoor = new Set(
+    Array.from(document.querySelectorAll('.ot-loft-grid'))
+      .filter(el => el.style.display !== 'none')
+      .map(el => el.id.replace('otg-',''))
+  );
   try {
     const id = editOnderhoudId || uid();
     if (editOnderhoudId) {
       await updateDoc(doc(db,'onderhoud',id), {naam, omschrijving});
     } else {
       await setDoc(doc(db,'onderhoud',id), {id, naam, omschrijving, loften:{}, aangemaaktOp:today()});
+      openVoor.add(id); // nieuwe taak meteen openen
     }
     closeModal('mOnderhoud');
     toast('Opgeslagen ✓','ok');
+    // Na render: dezelfde taken terug openen
+    setTimeout(() => {
+      openVoor.forEach(tid => {
+        const grid = document.getElementById('otg-' + tid);
+        if (grid) grid.style.display = 'grid';
+      });
+    }, 400);
   } catch(e) { toast('Fout bij opslaan','err'); }
 };
 
