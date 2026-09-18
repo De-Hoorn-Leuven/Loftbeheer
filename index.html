@@ -2759,7 +2759,11 @@ function renderOnderhoud() {
         ${isEigenaar() ? `<button class="btn btn-ghost btn-xs" onclick="event.stopPropagation();openOnderhoudModal('${taak.id}')" style="margin-left:4px">✏️</button>` : ''}
       </div>
       <div class="ot-loft-grid" id="otg-${taak.id}" style="display:none">
-        ${LOFTS.map(l => {
+        ${[...LOFTS].sort((a,b) => {
+          const [av, an] = a.id.split('.').map(Number);
+          const [bv, bn] = b.id.split('.').map(Number);
+          return av!==bv ? av-bv : an-bn;
+        }).map(l => {
           const lsKey = l.id.replace('.', '_');
           const ls = loftStatus[lsKey];
           const isKlaar = ls?.klaar === true;
