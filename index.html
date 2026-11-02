@@ -1904,6 +1904,11 @@ window._openNieuweBoeking = function() {
   document.getElementById('bk-rest').style.display = 'none';
   document.getElementById('bk-extrakamer-wrap').style.display = 'none';
   document.getElementById('bk-extra-wrap').style.display = 'none';
+  // FIX: restanten van de vorige geopende boeking wissen. De poets-inputs schrijven
+  // bij onchange rechtstreeks naar Firestore met de taak-id's van die vorige boeking.
+  document.getElementById('bk-poets-wrap').style.display = 'none';
+  document.getElementById('bk-poets-lijst').innerHTML = '';
+  document.getElementById('bk-notitie').value = '';
   bkError('');
   openModal('mBoeking');
 };
@@ -2481,15 +2486,31 @@ function dichtsteBijgelegenWeekdag(datum) {
 
 // Herbereken eindpoets van een aangrenzende boeking in een bestaande writeBatch
 function _herberekendAangrenzende(wb, aangrenzendeBk, nieuweDeadline) {
-  const ep = berekenEindpoetsDatum(aangrenzendeBk.checkOut, nieuweDeadline);
   const oudeTaak = Object.values(cache.taken).find(
     t => t.bkId===aangrenzendeBk.id && t.type==='eindpoets' && t.status==='open'
   );
-  if (oudeTaak) {
-    wb.update(doc(db,'taken',oudeTaak.id), {
-      datum: ep.datum, tijdVan: ep.tijdVan, tijdTot: ep.tijdTot
-    });
+  if (!oudeTaak) return;
+  // FIX: bevestigde eindpoets nooit aanpassen
+  if (oudeTaak.bevestigd) {
+    if (nieuweDeadline && oudeTaak.datum > nieuweDeadline) {
+      toast(`⚠️ Bevestigde eindpoets loft ${aangrenzendeBk.loftId} (${aangrenzendeBk.naam}) valt na de nieuwe check-in — controleren`, 'err');
+    }
+    return;
   }
+  // FIX: huidige (eventueel manueel aangepaste) datum behouden zolang die nog geldig is
+  const nogGeldig = oudeTaak.datum >= aangrenzendeBk.checkOut &&
+                    (!nieuweDeadline || oudeTaak.datum <= nieuweDeadline);
+  if (nogGeldig) {
+    const tijdTot = (nieuweDeadline && oudeTaak.datum === nieuweDeadline) ? '15:00' : (oudeTaak.tijdTot || '');
+    if (tijdTot !== (oudeTaak.tijdTot || '')) {
+      wb.update(doc(db,'taken',oudeTaak.id), {tijdTot});
+    }
+    return;
+  }
+  const ep = berekenEindpoetsDatum(aangrenzendeBk.checkOut, nieuweDeadline, aangrenzendeBk.checkOutTijd);
+  wb.update(doc(db,'taken',oudeTaak.id), {
+    datum: ep.datum, tijdVan: ep.tijdVan, tijdTot: ep.tijdTot
+  });
 }
 
 async function generateTaken(bk) {
