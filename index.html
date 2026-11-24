@@ -1097,13 +1097,13 @@ function fmtDateLong(iso) {
 function initials(naam) { return naam.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase(); }
 function isEigenaar() { return curUser?.rol === 'eigenaar'; }
 
-function toast(msg, type='') {
+function toast(msg, type='', ms=3200) {
   const tw = document.getElementById('twrap');
   const t = document.createElement('div');
   t.className = 'toast' + (type==='err'?' err':type==='ok'?' ok':'');
   t.textContent = msg;
   tw.appendChild(t);
-  setTimeout(()=>t.remove(), 3200);
+  setTimeout(()=>t.remove(), ms);
 }
 
 function setSyncStatus(status) {
@@ -1128,9 +1128,12 @@ function startListeners() {
     const u = onSnapshot(collection(db, col),
       snap => {
         cache[col] = {};
-        snap.forEach(d => { cache[col][d.id] = {id:d.id, ...d.data()}; });
+        // doc-ID wint altijd van een eventueel 'id'-veld in de data
+        snap.forEach(d => { cache[col][d.id] = {...d.data(), id:d.id}; });
         // Re-render actieve pagina
         if (curPage) render(curPage);
+        // Open boekingvenster: Poets Planning altijd uit de actuele taken-documenten
+        if (col === 'taken' || col === 'boekingen') _vernieuwPoetsPlanningAlsOpen();
         if (col === 'team') renderLogin();
         setSyncStatus('ok');
       },
@@ -1904,11 +1907,6 @@ window._openNieuweBoeking = function() {
   document.getElementById('bk-rest').style.display = 'none';
   document.getElementById('bk-extrakamer-wrap').style.display = 'none';
   document.getElementById('bk-extra-wrap').style.display = 'none';
-  // FIX: restanten van de vorige geopende boeking wissen. De poets-inputs schrijven
-  // bij onchange rechtstreeks naar Firestore met de taak-id's van die vorige boeking.
-  document.getElementById('bk-poets-wrap').style.display = 'none';
-  document.getElementById('bk-poets-lijst').innerHTML = '';
-  document.getElementById('bk-notitie').value = '';
   bkError('');
   openModal('mBoeking');
 };
@@ -1945,9 +1943,27 @@ window._openBoeking = function(id) {
 };
 
 // ── Poets planning sectie renderen ──
+// Rijen komen ALTIJD uit de actuele taken-documenten van deze boeking (op bkId),
+// nooit uit een bewaarde kopie van taak-ID's.
+let _ppSig = '';
+function _ppSignatuur(bkId) {
+  return Object.values(cache.taken).filter(ta => ta.bkId === bkId)
+    .map(ta => [ta.id, ta.datum, ta.tijdVan, ta.tijdTot, ta.bevestigd ? 1 : 0].join('|'))
+    .sort().join(';');
+}
+// Herteken enkel als de taken van de open boeking echt veranderd zijn (voorkomt stale ID's)
+function _vernieuwPoetsPlanningAlsOpen() {
+  const modal = document.getElementById('mBoeking');
+  if (!modal || !modal.classList.contains('open') || !editBoekingId) return;
+  const bk = cache.boekingen[editBoekingId];
+  if (!bk) return;
+  if (_ppSignatuur(bk.id) !== _ppSig) _bkVulPoetsPlanning(bk);
+}
+
 function _bkVulPoetsPlanning(bk) {
   const wrap = document.getElementById('bk-poets-wrap');
   const lijst = document.getElementById('bk-poets-lijst');
+  _ppSig = _ppSignatuur(bk.id);
 
   // Haal alle taken voor deze boeking op
   const taken = Object.values(cache.taken)
@@ -1999,21 +2015,51 @@ function _bkVulPoetsPlanning(bk) {
 
 window.bkPoetsDatumGewijzigd = async function(taakId, nieuweDatum) {
   if (!nieuweDatum) return;
+  const ta = cache.taken[taakId];
+  if (!ta) {
+    toast('Deze poetstaak bestaat niet meer. De planning wordt herladen — probeer opnieuw.', 'err', 6000);
+    if (editBoekingId && cache.boekingen[editBoekingId]) _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
+    return;
+  }
+  if (ta.bevestigd) {
+    toast('Een bevestigde poetstaak kan niet gewijzigd worden.', 'err');
+    if (editBoekingId && cache.boekingen[editBoekingId]) _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
+    return;
+  }
   try {
     await updateDoc(doc(db,'taken',taakId), {datum: nieuweDatum});
-  } catch(e) { console.error('datum save:', e); toast('Fout bij opslaan','err'); }
+    const bk = ta.bkId ? cache.boekingen[ta.bkId] : null;
+    if (bk && ta.type === 'tussentijds' && (nieuweDatum <= bk.checkIn || nieuweDatum >= bk.checkOut)) {
+      toast('⚠️ Deze datum valt buiten het verblijf van de gast.', 'err', 6000);
+    }
+  } catch(e) {
+    console.error('datum save:', e);
+    toast('Datum niet opgeslagen: ' + (e.message || e), 'err', 6000);
+    if (editBoekingId && cache.boekingen[editBoekingId]) _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
+  }
 };
 
 window.bkPoetsTijdGewijzigd = async function(taakId, vanTot, waarde) {
   if (!waarde) return;
+  const ta = cache.taken[taakId];
+  if (!ta) {
+    toast('Deze poetstaak bestaat niet meer. De planning wordt herladen — probeer opnieuw.', 'err', 6000);
+    if (editBoekingId && cache.boekingen[editBoekingId]) _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
+    return;
+  }
+  if (ta.bevestigd) { toast('Een bevestigde poetstaak kan niet gewijzigd worden.', 'err'); return; }
   try {
     await updateDoc(doc(db,'taken',taakId), {[vanTot==='van'?'tijdVan':'tijdTot']: waarde});
-  } catch(e) { console.error('tijd save:', e); }
+  } catch(e) {
+    console.error('tijd save:', e);
+    toast('Tijd niet opgeslagen: ' + (e.message || e), 'err', 6000);
+  }
 };
 
 window.bkBevestigPoets = async function(taakId) {
   const ta = cache.taken[taakId];
-  if (!ta || ta.bevestigd) return;
+  if (!ta) { toast('Deze poetstaak bestaat niet meer. Heropen de boeking.', 'err', 6000); return; }
+  if (ta.bevestigd) return;
 
   // Lees ALTIJD direct uit de DOM — nooit uit cache
   const rij = document.getElementById('pprij-' + taakId);
@@ -2231,83 +2277,51 @@ window.saveBoeking = async function() {
     const bk = {id, loftId, naam, checkIn:ci, checkOut:co,
                 checkInTijd:ciTijd, checkOutTijd:coTijd,
                 logeerbedden, babybedden, extraKamer, notitie};
-    if (editBoekingId) {
-      const oudeLoft = cache.boekingen[editBoekingId]?.loftId;
-      const loftGewijzigd = oudeLoft && oudeLoft !== loftId;
+    const oud = editBoekingId ? cache.boekingen[editBoekingId] : null;
 
-      // Bevestigde taken voor deze boeking
-      const bevestigdeTaken = Object.values(cache.taken).filter(
-        ta => ta.bkId===editBoekingId && ta.bevestigd
+    // Wat moet er met de taken gebeuren? (nog niets geschreven)
+    const plan = _taakPlan(bk, oud);
+
+    // Bevestigde taken die niet meer in het verblijf passen: nooit stilzwijgend verplaatsen
+    let verwijderBuiten = false;
+    if (plan.buitenVenster.length) {
+      const datums = plan.buitenVenster.map(ta => fmtDateLong(ta.datum)).join(', ');
+      verwijderBuiten = confirm(
+        `⚠️ ${plan.buitenVenster.length} bevestigde poetstaak(en) valt buiten het nieuwe verblijf:\n${datums}\n\nKlik OK om deze taak(en) te VERWIJDEREN.\nKlik Annuleren om ze te BEWAREN (los van de boeking).`
       );
-
-      // Bevestigde taken buiten nieuw datumvenster → eigenaar moet beslissen
-      const takenBuitenVenster = bevestigdeTaken.filter(
-        ta => ta.datum < ci || ta.datum > co
-      );
-      let verwijderBuiten = false;
-      if (takenBuitenVenster.length) {
-        const datums = takenBuitenVenster.map(ta => `${fmtDateLong(ta.datum)}`).join(', ');
-        const keuze = confirm(
-          `⚠️ ${takenBuitenVenster.length} bevestigde poetstaak(en) valt buiten het nieuwe verblijf:\n${datums}\n\nKlik OK om deze taak(en) te VERWIJDEREN.\nKlik Annuleren om ze te BEWAREN (los van de boeking).`
-        );
-        verwijderBuiten = keuze;
-        if (!keuze) {
-          // Bewaren maar ontkoppelen van boeking (bkId leegmaken)
-          // zodat ze niet mee verwijderd worden bij boeking-delete
-        }
-      }
-
-      // Open niet-bevestigde taken verwijderen
-      const teVerwijderen = Object.values(cache.taken).filter(ta =>
-        ta.bkId===editBoekingId && ta.status==='open' && !ta.bevestigd
-      );
-      const batch = writeBatch(db);
-      teVerwijderen.forEach(ta => batch.delete(doc(db,'taken',ta.id)));
-
-      // Bevestigde taken buiten venster: verwijderen of ontkoppelen
-      if (takenBuitenVenster.length) {
-        takenBuitenVenster.forEach(ta => {
-          if (verwijderBuiten) {
-            batch.delete(doc(db,'taken',ta.id));
-          } else {
-            // Ontkoppelen van boeking maar bewaren als zelfstandige taak
-            batch.update(doc(db,'taken',ta.id), {bkId: null, gast: ta.gast + ' (losgekoppeld)'});
-          }
-        });
-      }
-
-      // Bevestigde taken: loftId updaten als loft gewijzigd
-      if (loftGewijzigd && bevestigdeTaken.length) {
-        bevestigdeTaken.forEach(ta => {
-          batch.update(doc(db,'taken',ta.id), {loftId});
-        });
-        toast(`${bevestigdeTaken.length} bevestigde taak(en) verplaatst naar loft ${loftId}`, 'ok');
-      }
-
-      batch.set(doc(db,'boekingen',id), bk);
-      await batch.commit();
-
-      // Bij loftwissel: herbereken ook eindpoets van vorige boeking op OUDE loft
-      // want die had mogelijk de CI van deze boeking als deadline
-      if (loftGewijzigd) {
-        const alleBk = Object.values(cache.boekingen);
-        const vorigeOpOudeLoft = alleBk
-          .filter(b => b.loftId===oudeLoft && b.checkOut<=ci && b.id!==editBoekingId)
-          .sort((a,b) => b.checkOut.localeCompare(a.checkOut))[0] || null;
-        if (vorigeOpOudeLoft) {
-          // Zoek volgende boeking op oude loft NA de verplaatste boeking
-          const volgendeOpOudeLoft = alleBk
-            .filter(b => b.loftId===oudeLoft && b.checkIn>=co && b.id!==editBoekingId)
-            .sort((a,b) => a.checkIn.localeCompare(b.checkIn))[0] || null;
-          const wb2 = writeBatch(db);
-          _herberekendAangrenzende(wb2, vorigeOpOudeLoft, volgendeOpOudeLoft?.checkIn || null);
-          await wb2.commit();
-        }
-      }
-    } else {
-      await setDoc(doc(db,'boekingen',id), bk);
     }
-    await generateTaken(bk);
+
+    const batch = writeBatch(db);
+    batch.set(doc(db,'boekingen',id), bk);
+    _pasPlanToe(batch, bk, plan);
+    plan.buitenVenster.forEach(ta => {
+      if (verwijderBuiten) batch.delete(doc(db,'taken',ta.id));
+      else batch.update(doc(db,'taken',ta.id), {bkId: null, gast: (ta.gast||'') + ' (losgekoppeld)'});
+    });
+
+    // Aangrenzende boekingen enkel herberekenen als de planning echt wijzigde
+    if (plan.planningGewijzigd) {
+      const alleBk = Object.values(cache.boekingen);
+      const vorigeBk = alleBk
+        .filter(b => b.loftId===loftId && b.checkOut<=ci && b.id!==id)
+        .sort((a,b) => b.checkOut.localeCompare(a.checkOut))[0] || null;
+      if (vorigeBk) _herberekendAangrenzende(batch, vorigeBk, ci);
+
+      // Loftwissel: eindpoets van de vorige boeking op de OUDE loft herberekenen
+      // (op basis van de oude positie van deze boeking)
+      if (oud && oud.loftId !== loftId) {
+        const vorigeOud = alleBk
+          .filter(b => b.loftId===oud.loftId && b.checkOut<=oud.checkIn && b.id!==id)
+          .sort((a,b) => b.checkOut.localeCompare(a.checkOut))[0] || null;
+        const volgendeOud = alleBk
+          .filter(b => b.loftId===oud.loftId && b.checkIn>=oud.checkOut && b.id!==id)
+          .sort((a,b) => a.checkIn.localeCompare(b.checkIn))[0] || null;
+        if (vorigeOud) _herberekendAangrenzende(batch, vorigeOud, volgendeOud?.checkIn || null);
+      }
+    }
+
+    await batch.commit();
+    plan.warn.forEach(w => toast('⚠️ ' + w, 'err', 9000));
     bkError(''); closeModal('mBoeking');
     toast('Boeking opgeslagen ✓','ok');
     await logAction(`Boeking loft ${loftId}: ${naam} (${ci} ${coTijd}–${co} ${ciTijd})`);
@@ -2444,136 +2458,191 @@ function berekenEindpoetsDatum(coStr, nextCiStr, coTijd) {
 /**
  * Berekent tussentijdse poets-datums.
  * < 14 dagen: geen tussentijds
- * 14–28 dagen: 1x rond het midden, op dichtstbijzijnde weekdag
- * > 28 dagen: elke 14 dagen, op dichtstbijzijnde weekdag
+ * 14–28 dagen: 1x rond het midden
+ * > 28 dagen: elke 14 dagen
+ * Elke kandidaat gaat terug naar de vorige WERKDAG (geen weekend, geen Belgische feestdag).
+ * Daarna vallen kandidaten weg die op/voor check-in liggen, dubbel zijn, of
+ * in de laatste 5 nachten van het verblijf vallen.
  */
 function berekenTussentijds(ci, co) {
-  const dagen = Math.round((new Date(co+'T12:00:00') - new Date(ci+'T12:00:00')) / 86400000);
+  const DAG = 86400000;
+  const ciD = new Date(ci+'T12:00:00');
+  const coD = new Date(co+'T12:00:00');
+  const dagen = Math.round((coD - ciD) / DAG);
   if (dagen < 14) return [];
-  const coDate = new Date(co+'T12:00:00');
-  const res = [];
-  const kandidaten = [];
 
+  const rauw = [];
   if (dagen <= 28) {
-    const mid = new Date(ci+'T12:00:00');
+    const mid = new Date(ciD);
     mid.setDate(mid.getDate() + Math.round(dagen/2));
-    kandidaten.push(dichtsteBijgelegenWeekdag(mid));
+    rauw.push(mid);
   } else {
-    let d = new Date(ci+'T12:00:00');
-    d.setDate(d.getDate()+14);
-    while (d < coDate) {
-      kandidaten.push(dichtsteBijgelegenWeekdag(new Date(d)));
-      d.setDate(d.getDate()+14);
+    const d = new Date(ciD);
+    d.setDate(d.getDate() + 14);
+    while (d < coD) {
+      rauw.push(new Date(d));
+      d.setDate(d.getDate() + 14);
     }
   }
 
-  // Wegfilteren: als ≤ 3 nachten resten na de tussentijdse datum → weglaten
-  kandidaten.forEach(datum => {
-    const nachtenResterend = Math.round((coDate - new Date(datum+'T12:00:00')) / 86400000);
-    if (nachtenResterend > 3) res.push(datum);
+  const res = [];
+  rauw.forEach(r => {
+    const datum = vorigeWerkdag(r);                 // 1. weekend/feestdag-shift
+    if (datum <= ci) return;                        // nooit op of voor de check-in dag
+    if (res.includes(datum)) return;                // geen dubbele datum binnen dezelfde boeking
+    const nachtenResterend = Math.round((coD - new Date(datum+'T12:00:00')) / DAG);
+    if (nachtenResterend > 5) res.push(datum);      // 2. geen tussentijds in de laatste 5 dagen
   });
-
   return res;
 }
 
-function dichtsteBijgelegenWeekdag(datum) {
-  const d = new Date(datum); d.setHours(12,0,0,0);
-  const dow = d.getDay();
-  if (dow===0) d.setDate(d.getDate()-2); // zo → vr (2 dagen terug)
-  if (dow===6) d.setDate(d.getDate()-1); // za → vr
-  return d.toISOString().slice(0,10);
+function _isoDatum(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
-// Herbereken eindpoets van een aangrenzende boeking in een bestaande writeBatch
+// Stapt terug tot een werkdag: slaat weekends en Belgische feestdagen over
+function vorigeWerkdag(datum) {
+  const d = new Date(datum); d.setHours(12,0,0,0);
+  for (let i = 0; i < 14 && !_isWerkdag(_isoDatum(d)); i++) d.setDate(d.getDate() - 1);
+  return _isoDatum(d);
+}
+
+// (naam behouden voor eventuele andere aanroepen)
+function dichtsteBijgelegenWeekdag(datum) { return vorigeWerkdag(datum); }
+
+// Herbereken eindpoets van een aangrenzende boeking in een bestaande writeBatch.
+// Raakt bevestigde of afgewerkte eindpoetsen nooit aan en schrijft enkel bij een echt verschil.
 function _herberekendAangrenzende(wb, aangrenzendeBk, nieuweDeadline) {
-  const oudeTaak = Object.values(cache.taken).find(
-    t => t.bkId===aangrenzendeBk.id && t.type==='eindpoets' && t.status==='open'
-  );
-  if (!oudeTaak) return;
-  // FIX: bevestigde eindpoets nooit aanpassen
-  if (oudeTaak.bevestigd) {
-    if (nieuweDeadline && oudeTaak.datum > nieuweDeadline) {
-      toast(`⚠️ Bevestigde eindpoets loft ${aangrenzendeBk.loftId} (${aangrenzendeBk.naam}) valt na de nieuwe check-in — controleren`, 'err');
-    }
-    return;
-  }
-  // FIX: huidige (eventueel manueel aangepaste) datum behouden zolang die nog geldig is
-  const nogGeldig = oudeTaak.datum >= aangrenzendeBk.checkOut &&
-                    (!nieuweDeadline || oudeTaak.datum <= nieuweDeadline);
-  if (nogGeldig) {
-    const tijdTot = (nieuweDeadline && oudeTaak.datum === nieuweDeadline) ? '15:00' : (oudeTaak.tijdTot || '');
-    if (tijdTot !== (oudeTaak.tijdTot || '')) {
-      wb.update(doc(db,'taken',oudeTaak.id), {tijdTot});
-    }
-    return;
-  }
   const ep = berekenEindpoetsDatum(aangrenzendeBk.checkOut, nieuweDeadline, aangrenzendeBk.checkOutTijd);
-  wb.update(doc(db,'taken',oudeTaak.id), {
-    datum: ep.datum, tijdVan: ep.tijdVan, tijdTot: ep.tijdTot
+  const taak = Object.values(cache.taken).find(
+    t => t.bkId===aangrenzendeBk.id && t.type==='eindpoets' && t.status==='open' && !t.bevestigd
+  );
+  if (!taak) return;
+  if (taak.datum !== ep.datum || taak.tijdVan !== ep.tijdVan || (taak.tijdTot||'') !== (ep.tijdTot||'')) {
+    wb.update(doc(db,'taken',taak.id), {datum: ep.datum, tijdVan: ep.tijdVan, tijdTot: ep.tijdTot});
+  }
+}
+
+/**
+ * Bepaalt (zonder te schrijven) wat er met de taken van een boeking moet gebeuren.
+ * Bestaande taken worden BIJGEWERKT in plaats van verwijderd + opnieuw aangemaakt,
+ * zodat taak-ID's stabiel blijven en handmatige aanpassingen behouden blijven.
+ *  - tussentijdse taken enkel herplannen als check-in of check-out wijzigt
+ *  - eindpoets enkel herplannen als check-out, CO-tijd of loft wijzigt
+ *  - bevestigde / afgewerkte taken worden nooit gewijzigd (enkel loft/gastnaam volgen)
+ *  - tussentijdse taken in het verleden worden niet aangemaakt en niet aangeraakt
+ */
+function _taakPlan(bk, oud) {
+  const t = today();
+  const nieuw = !oud;
+  const datumsGewijzigd = nieuw || oud.checkIn !== bk.checkIn || oud.checkOut !== bk.checkOut;
+  const loftGewijzigd   = !nieuw && oud.loftId !== bk.loftId;
+  const coTijdGewijzigd = !nieuw && (oud.checkOutTijd||'11:00') !== (bk.checkOutTijd||'11:00');
+  const naamGewijzigd   = !nieuw && oud.naam !== bk.naam;
+  const herplanEp   = nieuw || oud.checkOut !== bk.checkOut || loftGewijzigd || coTijdGewijzigd;
+  const herplanTuss = datumsGewijzigd;
+
+  const plan = {
+    upd: {}, del: new Set(), add: [], warn: [], buitenVenster: [],
+    planningGewijzigd: datumsGewijzigd || loftGewijzigd || coTijdGewijzigd
+  };
+  const upd = (id, f) => { plan.upd[id] = {...(plan.upd[id]||{}), ...f}; };
+
+  const bestaand = Object.values(cache.taken).filter(ta => ta.bkId === bk.id && !ta.manueel);
+
+  // Loft en gastnaam volgen de boeking (ook bij bevestigde taken)
+  bestaand.forEach(ta => {
+    const f = {};
+    if (loftGewijzigd) f.loftId = bk.loftId;
+    if (naamGewijzigd) f.gast = bk.naam;
+    if (Object.keys(f).length) upd(ta.id, f);
+  });
+
+  // ── Eindpoets ──
+  if (herplanEp) {
+    const volgendeBk = Object.values(cache.boekingen)
+      .filter(b => b.loftId===bk.loftId && b.checkIn >= bk.checkOut && b.id!==bk.id)
+      .sort((a,b) => a.checkIn.localeCompare(b.checkIn))[0] || null;
+    const ep = berekenEindpoetsDatum(bk.checkOut, volgendeBk?.checkIn || null, bk.checkOutTijd);
+
+    const eps = bestaand.filter(ta => ta.type === 'eindpoets');
+    const beschermd = eps.filter(ta => ta.bevestigd || ta.status === 'klaar');
+    if (beschermd.length) {
+      beschermd
+        .filter(ta => ta.bevestigd && ta.status !== 'klaar' && ta.datum < bk.checkOut)
+        .forEach(ta => plan.warn.push(
+          `Bevestigde eindpoets op ${fmtDate(ta.datum)} ligt vóór de nieuwe check-out (${fmtDate(bk.checkOut)}). Niet aangepast — controleer dit.`));
+    } else {
+      const open = eps.filter(ta => ta.status === 'open').sort((a,b) => a.datum.localeCompare(b.datum));
+      if (open.length) {
+        upd(open[0].id, {datum: ep.datum, tijdVan: ep.tijdVan, tijdTot: ep.tijdTot});
+        open.slice(1).forEach(ta => plan.del.add(ta.id));   // dubbels van eerdere regeneraties opruimen
+      } else {
+        plan.add.push({type:'eindpoets', datum: ep.datum, tijdVan: ep.tijdVan, tijdTot: ep.tijdTot});
+      }
+    }
+  }
+
+  // ── Tussentijds ──
+  if (herplanTuss) {
+    const tuss = bestaand.filter(ta => ta.type === 'tussentijds');
+    const isBeschermd = ta => ta.bevestigd === true || ta.status === 'klaar' || ta.datum < t;
+    const beschermd = tuss.filter(isBeschermd);
+    const vrij = tuss.filter(ta => !isBeschermd(ta)).sort((a,b) => a.datum.localeCompare(b.datum));
+
+    const gewenst = berekenTussentijds(bk.checkIn, bk.checkOut);
+    const gebruikt = new Set();
+    const onbedekt = [];
+    gewenst.forEach(d => {
+      // Is deze plek al ingenomen door een beschermde taak (±7 dagen)?
+      let best = null, bestDiff = Infinity;
+      beschermd.forEach(p => {
+        if (gebruikt.has(p.id)) return;
+        const diff = Math.abs((new Date(p.datum+'T12:00:00') - new Date(d+'T12:00:00')) / 86400000);
+        if (diff <= 7 && diff < bestDiff) { best = p; bestDiff = diff; }
+      });
+      if (best) gebruikt.add(best.id);
+      else if (d >= t) onbedekt.push(d);           // nooit een taak in het verleden aanmaken
+    });
+
+    onbedekt.forEach((d, i) => {
+      const v = vrij[i];
+      if (v) { if (v.datum !== d) upd(v.id, {datum: d}); }   // bestaande taak hergebruiken
+      else plan.add.push({type:'tussentijds', datum: d, tijdVan:'11:00', tijdTot:'15:00'});
+    });
+    vrij.slice(onbedekt.length).forEach(v => plan.del.add(v.id));
+
+    // Bevestigde (nog open) taken die niet meer binnen het verblijf passen → enkel melden
+    tuss.filter(ta => ta.bevestigd && ta.status !== 'klaar' && (ta.datum <= bk.checkIn || ta.datum >= bk.checkOut))
+        .forEach(ta => plan.buitenVenster.push(ta));
+  }
+  return plan;
+}
+
+// Zet een plan om naar writes in een bestaande batch
+function _pasPlanToe(wb, bk, plan) {
+  Object.entries(plan.upd).forEach(([id, f]) => {
+    if (!plan.del.has(id)) wb.update(doc(db,'taken',id), f);
+  });
+  plan.del.forEach(id => wb.delete(doc(db,'taken',id)));
+  plan.add.forEach(nt => {
+    const id = uid();
+    wb.set(doc(db,'taken',id), {
+      id, type: nt.type, loftId: bk.loftId, bkId: bk.id, gast: bk.naam,
+      datum: nt.datum, tijdVan: nt.tijdVan, tijdTot: nt.tijdTot,
+      status:'open', klaarDoor:null, klaarOp:null
+    });
   });
 }
 
+// Voor nieuwe boekingen (o.a. batch-invoer): taken aanmaken + eindpoets vorige boeking bijwerken
 async function generateTaken(bk) {
-  // Gebruik de meest recente cache (net ge-update door saveBoeking)
-  const alleBk = Object.values(cache.boekingen);
-
-  // Zoek vorige en volgende boeking op dit loft
-  const vorigeBk = alleBk
+  const wb = writeBatch(db);
+  _pasPlanToe(wb, bk, _taakPlan(bk, null));
+  const vorigeBk = Object.values(cache.boekingen)
     .filter(b => b.loftId===bk.loftId && b.checkOut <= bk.checkIn && b.id!==bk.id)
     .sort((a,b) => b.checkOut.localeCompare(a.checkOut))[0] || null;
-
-  const volgendeBk = alleBk
-    .filter(b => b.loftId===bk.loftId && b.checkIn >= bk.checkOut && b.id!==bk.id)
-    .sort((a,b) => a.checkIn.localeCompare(b.checkIn))[0] || null;
-
-  // Eindpoets voor DEZE boeking (deadline = start volgende boeking)
-  const ep = berekenEindpoetsDatum(bk.checkOut, volgendeBk?.checkIn || null, bk.checkOutTijd);
-
-  const wb = writeBatch(db);
-
-  // Eindpoets: alleen aanmaken als er geen bevestigde eindpoets al bestaat
-  const bevestigdeEp = Object.values(cache.taken).find(
-    ta => ta.bkId===bk.id && ta.type==='eindpoets' && ta.bevestigd
-  );
-  if (!bevestigdeEp) {
-    const epId = uid();
-    wb.set(doc(db,'taken',epId), {
-      id:epId, type:'eindpoets', loftId:bk.loftId, bkId:bk.id,
-      gast:bk.naam, datum:ep.datum, tijdVan:ep.tijdVan, tijdTot:ep.tijdTot,
-      status:'open', klaarDoor:null, klaarOp:null
-    });
-  }
-
-  // Tussentijds: beschermde taken (bevestigd of klaar) per positie bijhouden
-  const t = today();
-  const beschermdeTuss = Object.values(cache.taken)
-    .filter(ta => ta.bkId===bk.id && ta.type==='tussentijds' && (ta.bevestigd || ta.status==='klaar'))
-    .sort((a,b) => a.datum.localeCompare(b.datum));
-
-  berekenTussentijds(bk.checkIn, bk.checkOut).forEach((datum, idx) => {
-    // Nooit een poetstaak in het verleden aanmaken
-    if (datum < t) return;
-    // Als er op deze positie al een beschermde taak bestaat, sla over
-    if (beschermdeTuss[idx]) return;
-    // Als er al een open taak bestaat op exact deze datum voor deze boeking, sla over
-    const bestaat = Object.values(cache.taken).find(
-      ta => ta.bkId===bk.id && ta.type==='tussentijds' && ta.datum===datum && ta.status==='open'
-    );
-    if (bestaat) return;
-    const tid = uid();
-    wb.set(doc(db,'taken',tid), {
-      id:tid, type:'tussentijds', loftId:bk.loftId, bkId:bk.id,
-      gast:bk.naam, datum, tijdVan:'11:00', tijdTot:'15:00',
-      status:'open', klaarDoor:null, klaarOp:null
-    });
-  });
-
-  // Herbereken eindpoets van VORIGE boeking:
-  // hun deadline is nu onze CI (of null als er geen volgende meer is)
-  if (vorigeBk) {
-    _herberekendAangrenzende(wb, vorigeBk, bk.checkIn);
-  }
-
+  if (vorigeBk) _herberekendAangrenzende(wb, vorigeBk, bk.checkIn);
   await wb.commit();
 }
 
