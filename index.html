@@ -1957,6 +1957,9 @@ function _vernieuwPoetsPlanningAlsOpen() {
   if (!modal || !modal.classList.contains('open') || !editBoekingId) return;
   const bk = cache.boekingen[editBoekingId];
   if (!bk) return;
+  // Niet hertekenen terwijl de gebruiker in een veld van de planning typt of een kiezer open heeft
+  const lijst = document.getElementById('bk-poets-lijst');
+  if (lijst && lijst.contains(document.activeElement)) return;
   if (_ppSignatuur(bk.id) !== _ppSig) _bkVulPoetsPlanning(bk);
 }
 
@@ -1982,6 +1985,10 @@ function _bkVulPoetsPlanning(bk) {
     const van = ta.tijdVan || (isEind ? '10:00' : '10:00');
     const tot = ta.tijdTot || '15:00';
 
+    // Datumkiezer beperken tot het verblijf (tussentijds) of vanaf check-out (eindpoets)
+    const dMin = isEind ? bk.checkOut : addDays(bk.checkIn, 1);
+    const dMax = isEind ? '' : addDays(bk.checkOut, -1);
+
     return `
       <div class="pp-rij${isBevestigd ? ' bevestigd' : ''}" id="pprij-${ta.id}">
         <div class="pp-dot ${dotKleur}"></div>
@@ -1989,19 +1996,22 @@ function _bkVulPoetsPlanning(bk) {
         <div class="pp-datum-wrap">
           <input type="date" class="pp-datum-input" value="${ta.datum}"
             ${isBevestigd ? 'disabled' : ''}
-            id="pp-datum-${ta.id}"
-            onchange="bkPoetsDatumGewijzigd('${ta.id}', this.value)">
+            id="pp-datum-${ta.id}" min="${dMin}" ${dMax ? `max="${dMax}"` : ''}
+            onchange="bkPoetsDatumGewijzigd('${ta.id}', this.value)"
+            onblur="bkPoetsFlush('${ta.id}')">
         </div>
         <div style="display:flex;align-items:center;gap:3px;flex-shrink:0">
           <input type="time" value="${van}" style="background:transparent;border:none;border-bottom:1px dashed var(--bdr2);color:var(--muted);font-size:10px;padding:1px 2px;width:48px;font-family:var(--sans);"
             ${isBevestigd ? 'disabled' : ''}
             id="pp-van-${ta.id}"
-            onchange="bkPoetsTijdGewijzigd('${ta.id}','van',this.value)">
+            onchange="bkPoetsTijdGewijzigd('${ta.id}','van',this.value)"
+            onblur="bkPoetsFlush('${ta.id}')">
           <span style="color:var(--muted);font-size:10px">–</span>
           <input type="time" value="${tot}" style="background:transparent;border:none;border-bottom:1px dashed var(--bdr2);color:var(--muted);font-size:10px;padding:1px 2px;width:48px;font-family:var(--sans);"
             ${isBevestigd ? 'disabled' : ''}
             id="pp-tot-${ta.id}"
-            onchange="bkPoetsTijdGewijzigd('${ta.id}','tot',this.value)">
+            onchange="bkPoetsTijdGewijzigd('${ta.id}','tot',this.value)"
+            onblur="bkPoetsFlush('${ta.id}')">
         </div>
         <button class="pp-bevestig-btn${isBevestigd ? ' bevestigd' : ''}"
           onclick="bkBevestigPoets('${ta.id}')"
@@ -2013,8 +2023,37 @@ function _bkVulPoetsPlanning(bk) {
   }).join('');
 }
 
-window.bkPoetsDatumGewijzigd = async function(taakId, nieuweDatum) {
+// Typen in een datum-/tijdveld vuurt bij elke geldige tussenwaarde een 'change'
+// (bv. jaar 0002, 0020, 0202, 2026). Daarom pas wegschrijven na een korte pauze of bij verlaten van het veld.
+const _ppPending = {};
+function _ppUitstellen(taakId, veld, run) {
+  const key = taakId + ':' + veld;
+  if (_ppPending[key]) clearTimeout(_ppPending[key].timer);
+  _ppPending[key] = { taakId, run, timer: setTimeout(() => { delete _ppPending[key]; run(); }, 900) };
+}
+function _ppAnnuleer(taakId) {
+  Object.keys(_ppPending).filter(k => _ppPending[k].taakId === taakId)
+    .forEach(k => { clearTimeout(_ppPending[k].timer); delete _ppPending[k]; });
+}
+window.bkPoetsFlush = function(taakId) {
+  Object.keys(_ppPending).filter(k => _ppPending[k].taakId === taakId).forEach(k => {
+    const p = _ppPending[k]; clearTimeout(p.timer); delete _ppPending[k]; p.run();
+  });
+};
+
+window.bkPoetsDatumGewijzigd = function(taakId, nieuweDatum) {
   if (!nieuweDatum) return;
+  _ppUitstellen(taakId, 'datum', () => _ppSchrijfDatum(taakId, nieuweDatum));
+};
+
+async function _ppSchrijfDatum(taakId, nieuweDatum) {
+  // Onzinnige tussenwaarden tijdens het typen (bv. jaar 0020) nooit opslaan
+  const jaar = parseInt(String(nieuweDatum).slice(0, 4), 10);
+  if (!(jaar >= 2020 && jaar <= 2100)) {
+    toast('Ongeldige datum — niet opgeslagen.', 'err');
+    if (editBoekingId && cache.boekingen[editBoekingId]) _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
+    return;
+  }
   const ta = cache.taken[taakId];
   if (!ta) {
     toast('Deze poetstaak bestaat niet meer. De planning wordt herladen — probeer opnieuw.', 'err', 6000);
@@ -2037,10 +2076,14 @@ window.bkPoetsDatumGewijzigd = async function(taakId, nieuweDatum) {
     toast('Datum niet opgeslagen: ' + (e.message || e), 'err', 6000);
     if (editBoekingId && cache.boekingen[editBoekingId]) _bkVulPoetsPlanning(cache.boekingen[editBoekingId]);
   }
+}
+
+window.bkPoetsTijdGewijzigd = function(taakId, vanTot, waarde) {
+  if (!waarde) return;
+  _ppUitstellen(taakId, 'tijd-' + vanTot, () => _ppSchrijfTijd(taakId, vanTot, waarde));
 };
 
-window.bkPoetsTijdGewijzigd = async function(taakId, vanTot, waarde) {
-  if (!waarde) return;
+async function _ppSchrijfTijd(taakId, vanTot, waarde) {
   const ta = cache.taken[taakId];
   if (!ta) {
     toast('Deze poetstaak bestaat niet meer. De planning wordt herladen — probeer opnieuw.', 'err', 6000);
@@ -2054,12 +2097,13 @@ window.bkPoetsTijdGewijzigd = async function(taakId, vanTot, waarde) {
     console.error('tijd save:', e);
     toast('Tijd niet opgeslagen: ' + (e.message || e), 'err', 6000);
   }
-};
+}
 
 window.bkBevestigPoets = async function(taakId) {
   const ta = cache.taken[taakId];
   if (!ta) { toast('Deze poetstaak bestaat niet meer. Heropen de boeking.', 'err', 6000); return; }
   if (ta.bevestigd) return;
+  _ppAnnuleer(taakId);   // geen uitgestelde save meer na het bevestigen
 
   // Lees ALTIJD direct uit de DOM — nooit uit cache
   const rij = document.getElementById('pprij-' + taakId);
